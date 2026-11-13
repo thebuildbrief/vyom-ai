@@ -1,0 +1,2 @@
+import test from 'node:test';import assert from 'node:assert/strict';import {completion} from './ai-coding-routes.js';
+test('AI reports a missing provider key instead of fabricating a response',async()=>{const saved=process.env.OPENAI_API_KEY;delete process.env.OPENAI_API_KEY;try{await assert.rejects(completion([{role:'user',content:'hello'}]),e=>e.status===503&&/OPENAI_API_KEY/.test(e.message))}finally{if(saved)process.env.OPENAI_API_KEY=saved}});
