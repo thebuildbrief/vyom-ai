@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 async function api(path, options = {}) {
   const response = await fetch(`${(import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '')}/api${path}`, {
     credentials: 'include',
+    cache: 'no-store',
     ...options,
     headers: { 'Content-Type': 'application/json', ...options.headers }
   });
@@ -24,6 +25,7 @@ export default function VoiceSession({ interviewId, onTranscript, onStateChange,
   const stateChange = useRef(onStateChange);
   const pausedRef = useRef(false);
   const stopped = useRef(true);
+  const saveQueue = useRef(Promise.resolve());
 
   useEffect(() => { stateChange.current = onStateChange; }, [onStateChange]);
   const updateState = value => {
@@ -57,6 +59,7 @@ export default function VoiceSession({ interviewId, onTranscript, onStateChange,
     if (disabled || !stopped.current) return;
     setError('');
     seen.current.clear();
+    saveQueue.current = Promise.resolve();
     updateState('connecting');
     stopped.current = false;
     try {
@@ -122,7 +125,9 @@ export default function VoiceSession({ interviewId, onTranscript, onStateChange,
         seen.current.add(`${role}:${itemId}`);
         if (role === 'assistant' && lastAssistantMessage && content.toLowerCase() === lastAssistantMessage.trim().toLowerCase()) return;
         try {
-          const saved = await api(`/interviews/${interviewId}/transcript`, { method: 'POST', body: JSON.stringify({ role, content }) });
+          const pending = saveQueue.current.then(() => api(`/interviews/${interviewId}/transcript`, { method: 'POST', body: JSON.stringify({ role, content }) }));
+          saveQueue.current = pending.catch(() => {});
+          const saved = await pending;
           onTranscript?.(saved);
         } catch (saveError) {
           setError(`Transcript could not be saved: ${saveError.message}`);

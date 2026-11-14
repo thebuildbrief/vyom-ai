@@ -79,16 +79,21 @@ Check the configured Neon connection and migrated tables without printing creden
 npm run verify:neon
 ```
 
-This confirms a PostgreSQL query, required schema tables, migration version 2, and a rolled-back transactional write/read check.
+This confirms a PostgreSQL query, required schema tables, resume analysis storage, migration version 5, and a rolled-back transactional write/read check.
+
+To apply schema changes without copying any local SQLite records, set `DATABASE_URL_UNPOOLED` to the intended Neon branch and run `npm run migrate:neon:schema`. This performs additive, idempotent schema setup only. `npm run migrate:neon` is the separate SQLite data importer.
 
 ## Implemented API and integrations
 
 - Authentication: registration, login/logout, email verification/resend, forgot/reset/change password, Google ID-token verification, HTTP-only JWT cookies, profile and settings.
 - Interviews: owned interview creation and history, persisted conversation turns, AI opening/follow-up questions, interview evaluation, report download and analytics.
-- Voice: OpenAI Realtime client secrets are issued by the API; WebRTC uses the browser's microphone with speaking/listening indicators, and transcript events are saved via the authenticated transcript endpoint.
-- Resumes: PDF validation, text extraction, resume-specific prompt context, optional Poppler/Tesseract OCR, private object storage, ownership-checked retrieval and deletion.
+- Voice: OpenAI Realtime client secrets are issued by the API; WebRTC uses the browser's microphone with speaking/listening indicators, and ordered transcript events are saved via the authenticated transcript endpoint. Requires `OPENAI_API_KEY` and browser microphone access.
+- Resumes: PDF validation, text extraction, evidence-based OpenAI analysis saved in Neon/SQLite, analysis-aware interview context, optional Poppler/Tesseract OCR, private object storage, ownership-checked retrieval and deletion. Requires a private Blob/S3 store for production files and `OPENAI_API_KEY` for AI findings.
 - Coding: JDoodle execution for C++, Java, Python and JavaScript. Test cases compare actual output and execution outcomes are persisted for later AI evaluation. A missing JDoodle configuration returns HTTP 503; execution is never simulated.
 - Dashboard: statistics are computed from the signed-in user's database rows; history filters and report records are user-scoped.
+- Community: email-based friend requests, accepted-friend leaderboard rankings from completed reports, private invite-code study rooms, member-only persisted chat and presence refreshes. Individual timer intervals persist per member; group time sums the union of overlapping study intervals (no double-counting). Heartbeats close abandoned sessions at their last confirmed activity. Study-room updates poll every five seconds to stay compatible with Vercel Functions; they do not use a persistent WebSocket server.
+
+Migrations v3–v5 only add friendship, study-room, study-timer tables, indexes, and an AI analysis column on resumes. They do not remove or rewrite existing tables or user records. Run `npm run migrate:neon:schema` with `DATABASE_URL_UNPOOLED` pointed at the intended Neon branch before deploying code that uses these features. The SQLite equivalent is applied automatically during local API startup.
 
 ## Deployment checks and known limits
 

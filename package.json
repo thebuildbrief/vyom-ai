@@ -10,6 +10,7 @@
     "build": "vite build",
     "test": "node --test",
     "start": "node server/index.js",
+    "migrate:neon:schema": "node server/migrate-neon-schema.js",
     "migrate:neon": "node server/import-sqlite-to-neon.js",
     "verify:neon": "node server/verify-neon.js"
   },

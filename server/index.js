@@ -10,6 +10,7 @@ import { migrate } from './migrate.js';
 import { installAccountRoutes } from './accounts.js';
 import { installResumeRoutes } from './resume-routes.js';
 import { installAiRoutes } from './ai-coding-routes.js';
+import { installCommunityRoutes, summarizeTimerSessions } from './community-routes.js';
 
 const app = express();
 const port = Number(process.env.PORT || 4000);
@@ -41,6 +42,9 @@ app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' }, contentS
 } } }));
 app.use(cors({ origin: (origin, callback) => callback(null, !origin || allowedOrigins.includes(origin)), credentials: true }));
 app.use(express.json({ limit: '1mb' }));
+// API responses are user-scoped; never allow browsers or shared caches to
+// retain an authenticated response by URL alone.
+app.use('/api', (_req, res, next) => { res.setHeader('Cache-Control', 'private, no-store'); next(); });
 app.use('/api', rateLimit({ windowMs: 60_000, limit: 90, standardHeaders: true, legacyHeaders: false }));
 app.use('/api', (req, res, next) => {
   const origin = req.get('Origin');
@@ -61,6 +65,7 @@ app.use((req, _res, next) => {
 app.locals.db = db;
 installAccountRoutes(app, { db, auth, secret, cookieOpts });
 installResumeRoutes(app, { db, auth });
+installCommunityRoutes(app, { db, auth });
 app.post('/api/auth/logout', (_req, res) => res.clearCookie('vyom', { httpOnly: true, sameSite: cookieOpts.sameSite, secure: cookieOpts.secure }).json({ ok: true }));
 app.get('/api/auth/me', auth, async (req, res) => {
   const user = await db.prepare('SELECT id,name,email,created_at FROM users WHERE id=?').get(req.user.id);
@@ -74,7 +79,10 @@ app.get('/api/dashboard', auth, async (req, res) => {
   const interviews = await db.prepare('SELECT id,role,type,difficulty,status,created_at FROM interviews WHERE user_id=? ORDER BY created_at DESC LIMIT 8').all(req.user.id);
   const scores = (await db.prepare('SELECT overall_score FROM reports WHERE user_id=?').all(req.user.id)).map(row => Number(row.overall_score)).filter(Number.isFinite);
   const row = await db.prepare("SELECT COALESCE(SUM(duration),0) AS seconds FROM interviews WHERE user_id=? AND status='completed'").get(req.user.id);
-  res.json({ interviews, stats: { completed: scores.length, averageScore: scores.length ? Math.round(scores.reduce((sum, value) => sum + value, 0) / scores.length) : null, hours: Math.round(Number(row.seconds || 0) / 60 * 10) / 10 } });
+  const friendRow = await db.prepare("SELECT COUNT(*) AS count FROM friendships WHERE (requester_id=? OR addressee_id=?) AND status='accepted'").get(req.user.id, req.user.id);
+  const studyRows = await db.prepare('SELECT user_id,started_at,ended_at,last_heartbeat_at FROM study_room_sessions WHERE user_id=?').all(req.user.id);
+  const studySeconds = summarizeTimerSessions(studyRows, req.user.id, Date.now()).individual_seconds;
+  res.json({ interviews, stats: { completed: scores.length, averageScore: scores.length ? Math.round(scores.reduce((sum, value) => sum + value, 0) / scores.length) : null, hours: Math.round(Number(row.seconds || 0) / 60 * 10) / 10, friends: Number(friendRow.count), studyHours: Math.round(studySeconds / 360) / 10 } });
 });
 app.post('/api/interviews', auth, async (req, res) => {
   const body = req.body || {}, id = crypto.randomUUID();

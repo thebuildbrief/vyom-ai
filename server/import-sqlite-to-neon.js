@@ -3,7 +3,7 @@ import Database from 'better-sqlite3';
 import { Pool } from 'pg';
 import { migrate } from './migrate.js';
 
-const tables = ['users', 'user_profiles', 'resumes', 'interviews', 'messages', 'submissions', 'reports', 'auth_tokens', 'coding_test_results'];
+const tables = ['users', 'user_profiles', 'resumes', 'interviews', 'messages', 'submissions', 'reports', 'auth_tokens', 'coding_test_results', 'friendships', 'study_rooms', 'study_room_members', 'study_room_messages', 'study_room_sessions'];
 const sourcePath = process.env.SOURCE_SQLITE_PATH || process.env.DATABASE_PATH || './server/data/vyom.sqlite';
 const connectionString = process.env.DATABASE_URL_UNPOOLED || process.env.DATABASE_URL;
 if (!connectionString) throw new Error('Set DATABASE_URL_UNPOOLED (preferred) or DATABASE_URL for the Neon migration target.');
