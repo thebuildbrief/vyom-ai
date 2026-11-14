@@ -25,7 +25,7 @@ async function readObject(reference){
 async function deleteObject(reference){if(reference.startsWith('blob:'))return del(reference.slice(5));if(reference.startsWith('s3:'))return objectRequest('DELETE',reference.slice(3));return fs.rm(reference,{force:true});}
 export function installResumeRoutes(app,{db,auth}){
   const upload=multer({storage:multer.memoryStorage(),limits:{fileSize:8*1024*1024,files:1},fileFilter:(_req,file,cb)=>cb(null,file.mimetype==='application/pdf'&&file.originalname.toLowerCase().endsWith('.pdf'))});
-  app.get('/api/resumes',auth,async(req,res)=>{try{res.json({resumes:await db.prepare('SELECT id,filename,created_at,CASE WHEN length(extracted_text)>0 THEN 1 ELSE 0 END AS analyzed FROM resumes WHERE user_id=? ORDER BY created_at DESC').all(req.user.id)})}catch(e){res.status(500).json({error:'Could not load resumes.'})}});
+  app.get('/api/resumes',auth,async(req,res)=>{try{const rows=await db.prepare('SELECT id,filename,created_at,extracted_text FROM resumes WHERE user_id=? ORDER BY created_at DESC').all(req.user.id);res.json({resumes:rows.map(({extracted_text,...resume})=>({...resume,analyzed:Boolean(extracted_text),sections:sections(extracted_text||'')}))})}catch(e){res.status(500).json({error:'Could not load resumes.'})}});
   app.post('/api/resumes',auth,upload.single('resume'),async(req,res)=>{
     if(!req.file)return res.status(400).json({error:'Choose a PDF resume (up to 8 MB).'});
     if(req.file.buffer.subarray(0,5).toString()!=='%PDF-')return res.status(400).json({error:'This file does not contain a valid PDF header.'});
