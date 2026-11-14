@@ -29,7 +29,7 @@ for (const method of ['get', 'post', 'put', 'patch', 'delete']) {
     : value));
 }
 
-const allowedOrigins = [process.env.CLIENT_ORIGIN, process.env.APP_ORIGIN, process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : null]
+const allowedOrigins = ['https://vyom-ai-flame.vercel.app', process.env.CLIENT_ORIGIN, process.env.APP_ORIGIN, process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : null]
   .filter(Boolean).flatMap(value => value.split(',')).map(value => value.trim()).filter(Boolean);
 if (!allowedOrigins.length) allowedOrigins.push('http://localhost:5173');
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' }, contentSecurityPolicy: { directives: {
