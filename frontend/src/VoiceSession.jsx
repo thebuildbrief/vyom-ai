@@ -12,7 +12,7 @@ async function api(path, options = {}) {
   return data;
 }
 
-export default function VoiceSession({ interviewId, onTranscript, onStateChange, lastAssistantMessage = '', disabled = false }) {
+export default function VoiceSession({ interviewId, onTranscript, onStateChange, onLevels, onMutedChange, onPausedChange, lastAssistantMessage = '', disabled = false }) {
   const [state, setState] = useState('idle');
   const [error, setError] = useState('');
   const [muted, setMuted] = useState(false);
@@ -23,18 +23,36 @@ export default function VoiceSession({ interviewId, onTranscript, onStateChange,
   const audio = useRef(null);
   const seen = useRef(new Set());
   const stateChange = useRef(onStateChange);
+  const levelCallback = useRef(onLevels);
+  const mutedCallback = useRef(onMutedChange);
+  const pausedCallback = useRef(onPausedChange);
+  const levelContext = useRef(null);
+  const levelFrame = useRef(0);
   const pausedRef = useRef(false);
+  const mutedRef = useRef(false);
   const stopped = useRef(true);
   const saveQueue = useRef(Promise.resolve());
 
   useEffect(() => { stateChange.current = onStateChange; }, [onStateChange]);
+  useEffect(() => { levelCallback.current = onLevels; }, [onLevels]);
+  useEffect(() => { mutedCallback.current = onMutedChange; }, [onMutedChange]);
+  useEffect(() => { pausedCallback.current = onPausedChange; }, [onPausedChange]);
   const updateState = value => {
     setState(value);
     stateChange.current?.(value);
   };
 
+  function stopLevels() {
+    cancelAnimationFrame(levelFrame.current);
+    levelFrame.current = 0;
+    try { levelContext.current?.close(); } catch { /* Already closed. */ }
+    levelContext.current = null;
+    levelCallback.current?.([]);
+  }
+
   function release(update = true) {
     stopped.current = true;
+    stopLevels();
     try { channel.current?.close(); } catch { /* Already closed. */ }
     try { peer.current?.close(); } catch { /* Already closed. */ }
     stream.current?.getTracks().forEach(track => track.stop());
@@ -43,6 +61,9 @@ export default function VoiceSession({ interviewId, onTranscript, onStateChange,
     peer.current = null;
     stream.current = null;
     pausedRef.current = false;
+    mutedRef.current = false;
+    mutedCallback.current?.(false);
+    pausedCallback.current?.(false);
     if (update) {
       setPaused(false);
       setMuted(false);
@@ -60,6 +81,12 @@ export default function VoiceSession({ interviewId, onTranscript, onStateChange,
     setError('');
     seen.current.clear();
     saveQueue.current = Promise.resolve();
+    mutedRef.current = false;
+    pausedRef.current = false;
+    setMuted(false);
+    setPaused(false);
+    mutedCallback.current?.(false);
+    pausedCallback.current?.(false);
     updateState('connecting');
     stopped.current = false;
     try {
@@ -67,6 +94,35 @@ export default function VoiceSession({ interviewId, onTranscript, onStateChange,
       const microphone = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
       if (stopped.current) { microphone.getTracks().forEach(track => track.stop()); return; }
       stream.current = microphone;
+
+      try {
+        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        if (AudioContextClass) {
+          const context = new AudioContextClass();
+          levelContext.current = context;
+          if (context.state === 'suspended') await context.resume();
+          if (stopped.current) { stopLevels(); return; }
+          const analyser = context.createAnalyser();
+          analyser.fftSize = 64;
+          analyser.smoothingTimeConstant = 0.65;
+          context.createMediaStreamSource(microphone).connect(analyser);
+          const bins = new Uint8Array(analyser.frequencyBinCount);
+          let lastPaint = 0;
+          const paint = time => {
+            if (stopped.current) return;
+            levelFrame.current = requestAnimationFrame(paint);
+            if (time - lastPaint < 90) return;
+            lastPaint = time;
+            const levels = Array(28).fill(2);
+            if (!mutedRef.current && !pausedRef.current) {
+              analyser.getByteFrequencyData(bins);
+              for (let i = 0; i < levels.length; i += 1) levels[i] = 2 + (bins[i % bins.length] / 255) * 36;
+            }
+            levelCallback.current?.(levels);
+          };
+          levelFrame.current = requestAnimationFrame(paint);
+        }
+      } catch { stopLevels(); }
 
       const session = await api(`/interviews/${interviewId}/voice/session`, { method: 'POST', body: '{}' });
       if (stopped.current) return;
@@ -159,8 +215,10 @@ export default function VoiceSession({ interviewId, onTranscript, onStateChange,
   }
 
   function toggleMute() {
-    const next = !muted;
+    const next = !mutedRef.current;
+    mutedRef.current = next;
     setMuted(next);
+    mutedCallback.current?.(next);
     stream.current?.getAudioTracks().forEach(track => { track.enabled = !next && !pausedRef.current; });
   }
 
@@ -168,7 +226,8 @@ export default function VoiceSession({ interviewId, onTranscript, onStateChange,
     const next = !pausedRef.current;
     pausedRef.current = next;
     setPaused(next);
-    stream.current?.getAudioTracks().forEach(track => { track.enabled = !next && !muted; });
+    pausedCallback.current?.(next);
+    stream.current?.getAudioTracks().forEach(track => { track.enabled = !next && !mutedRef.current; });
     if (audio.current) audio.current.muted = next;
     if (next) updateState('paused');
     else {

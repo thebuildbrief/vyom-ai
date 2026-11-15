@@ -1,10 +1,17 @@
 import crypto from 'node:crypto';
 
 const HEARTBEAT_GRACE_MS = 45_000;
-const millis = value => value == null ? null : new Date(value).getTime();
+const WEEK_MS = 7 * 864e5;
+// SQLite CURRENT_TIMESTAMP is UTC without a zone; parse it as UTC, not local time.
+const millis = value => {
+  if (value == null) return null;
+  const text = String(value);
+  if (/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(text)) return new Date(`${text.replace(' ', 'T')}Z`).getTime();
+  return new Date(value).getTime();
+};
 
-export function summarizeTimerSessions(sessions, userId, now) {
-  const intervals = sessions.map(row => {
+export function timerIntervals(sessions, now) {
+  return sessions.map(row => {
     const start = millis(row.started_at);
     let end = millis(row.ended_at);
     if (end == null) {
@@ -13,6 +20,78 @@ export function summarizeTimerSessions(sessions, userId, now) {
     }
     return { userId: row.user_id, start, end: Math.max(start || now, end || now), active: row.ended_at == null && now - (millis(row.last_heartbeat_at) || 0) <= HEARTBEAT_GRACE_MS };
   }).filter(row => Number.isFinite(row.start) && Number.isFinite(row.end));
+}
+
+export function studySecondsByUser(sessions, now, startMs = -Infinity, endMs = now) {
+  const totals = new Map();
+  for (const row of timerIntervals(sessions, now)) {
+    const from = Math.max(row.start, startMs), to = Math.min(row.end, endMs);
+    if (to > from) totals.set(row.userId, (totals.get(row.userId) || 0) + (to - from) / 1000);
+  }
+  return totals;
+}
+
+export function summarizeMemberStudy(sessions, now) {
+  const totals = studySecondsByUser(sessions, now);
+  const active = new Set(timerIntervals(sessions, now).filter(row => row.active).map(row => row.userId));
+  return { totals, active };
+}
+
+function leaderboardPoints({ completed, averageScore, codingPassed, codingSolved, studySeconds }) {
+  return completed * 50 + (averageScore ?? 0) + codingPassed * 5 + codingSolved * 15 + Math.floor(studySeconds / 60) * 2;
+}
+
+async function buildLeaderboard(db, userIds, { period, meId, now }) {
+  const users = userIds
+    ? await db.prepare(`SELECT id,name,profile_image FROM users WHERE id IN (${userIds.map(() => '?').join(',')})`).all(...userIds)
+    : await db.prepare('SELECT id,name,profile_image FROM users ORDER BY created_at').all();
+  if (!users.length) return [];
+  const ids = users.map(user => user.id), marks = ids.map(() => '?').join(','), startMs = period === 'weekly' ? now - WEEK_MS : -Infinity;
+  const [reports, submissions, sessions] = await Promise.all([
+    db.prepare(`SELECT user_id,overall_score,created_at FROM reports WHERE user_id IN (${marks})`).all(...ids),
+    db.prepare(`SELECT id,user_id,problem_key,result,created_at FROM submissions WHERE user_id IN (${marks})`).all(...ids),
+    db.prepare(`SELECT user_id,started_at,ended_at,last_heartbeat_at FROM study_room_sessions WHERE user_id IN (${marks})`).all(...ids)
+  ]);
+  const activity = new Map(ids.map(id => [id, { completed: 0, scoreTotal: 0, codingPassed: 0, codingTotal: 0, solved: new Set(), studySeconds: 0 }]));
+  for (const report of reports) {
+    if ((millis(report.created_at) || 0) < startMs) continue;
+    const row = activity.get(report.user_id);
+    if (!row) continue;
+    row.completed += 1;
+    row.scoreTotal += Number(report.overall_score) || 0;
+  }
+  for (const submission of submissions) {
+    if ((millis(submission.created_at) || 0) < startMs) continue;
+    const row = activity.get(submission.user_id);
+    if (!row) continue;
+    let result = {};
+    try { result = JSON.parse(submission.result || '{}'); } catch { /* Keep malformed historical rows from breaking the board. */ }
+    const passed = Math.max(0, Number(result.passed) || 0), total = Math.max(0, Number(result.total) || 0);
+    row.codingPassed += passed;
+    row.codingTotal += total;
+    if (total > 0 && passed === total && submission.problem_key) row.solved.add(submission.problem_key);
+  }
+  const studyTotals = studySecondsByUser(sessions, now, startMs, now);
+  const rows = users.map(user => {
+    const row = activity.get(user.id);
+    row.studySeconds = Math.floor(studyTotals.get(user.id) || 0);
+    const averageScore = row.completed ? Math.round(row.scoreTotal / row.completed) : null;
+    const codingSolved = row.solved.size;
+    const points = leaderboardPoints({ completed: row.completed, averageScore, codingPassed: row.codingPassed, codingSolved, studySeconds: row.studySeconds });
+    return {
+      id: user.id, name: user.name, profile_image: user.profile_image || null,
+      points, completed_interviews: row.completed, average_score: averageScore,
+      coding_passed: row.codingPassed, coding_total: row.codingTotal, coding_solved: codingSolved,
+      study_seconds: row.studySeconds, me: user.id === meId,
+      points_breakdown: { interviews: row.completed * 50, reports: averageScore ?? 0, coding: row.codingPassed * 5 + codingSolved * 15, study: Math.floor(row.studySeconds / 60) * 2 }
+    };
+  });
+  rows.sort((a, b) => b.points - a.points || b.completed_interviews - a.completed_interviews || Number(b.average_score || 0) - Number(a.average_score || 0) || String(a.name).localeCompare(String(b.name)));
+  return rows.slice(0, 100).map((row, index) => ({ ...row, rank: index + 1 }));
+}
+
+export function summarizeTimerSessions(sessions, userId, now) {
+  const intervals = timerIntervals(sessions, now);
   const personalSeconds = intervals.filter(row => row.userId === userId).reduce((sum, row) => sum + Math.max(0, row.end - row.start), 0) / 1000;
   const ordered = intervals.slice().sort((a, b) => a.start - b.start);
   let union = 0, edge = null;
@@ -90,6 +169,17 @@ export function installCommunityRoutes(app, { db, auth }) {
     res.json({ leaderboard: rows.map((row, index) => ({ ...row, completed: Number(row.completed), average_score: row.average_score == null ? null : Number(row.average_score), rank: index + 1, me: row.id === req.user.id })) });
   });
 
+  app.get('/api/leaderboard', auth, async (req, res) => {
+    const scope = req.query.scope === 'global' ? 'global' : 'friends', period = req.query.period === 'weekly' ? 'weekly' : 'all';
+    let ids = null;
+    if (scope === 'friends') {
+      const links = await db.prepare("SELECT CASE WHEN requester_id=? THEN addressee_id ELSE requester_id END AS user_id FROM friendships WHERE (requester_id=? OR addressee_id=?) AND status='accepted'").all(req.user.id, req.user.id, req.user.id);
+      ids = [...new Set([req.user.id, ...links.map(row => row.user_id)])];
+    }
+    const now = Date.now();
+    res.json({ scope, period, leaderboard: await buildLeaderboard(db, ids, { period, meId: req.user.id, now }), updated_at: new Date(now).toISOString() });
+  });
+
   app.post('/api/study-rooms', auth, async (req, res) => {
     const name = String(req.body?.name || '').trim().slice(0, 80);
     if (!name) return res.status(400).json({ error: 'Give your study room a name.' });
@@ -150,9 +240,22 @@ export function installCommunityRoutes(app, { db, auth }) {
     const room = await db.prepare('SELECT r.id,r.name,r.owner_id,r.join_code,r.created_at FROM study_rooms r JOIN study_room_members m ON m.room_id=r.id WHERE r.id=? AND m.user_id=?').get(req.params.id, req.user.id);
     if (!room) return res.status(404).json({ error: 'Study room not found.' });
     await db.prepare('UPDATE study_room_members SET last_seen_at=CURRENT_TIMESTAMP WHERE room_id=? AND user_id=?').run(room.id, req.user.id);
-    const members = await db.prepare("SELECT u.id,u.name,m.last_seen_at FROM study_room_members m JOIN users u ON u.id=m.user_id WHERE m.room_id=? ORDER BY lower(u.name)").all(room.id);
+    const members = await db.prepare("SELECT u.id,u.name,u.profile_image,m.last_seen_at FROM study_room_members m JOIN users u ON u.id=m.user_id WHERE m.room_id=? ORDER BY lower(u.name)").all(room.id);
     const messages = await db.prepare('SELECT m.id,m.user_id,u.name,m.content,m.created_at FROM study_room_messages m JOIN users u ON u.id=m.user_id WHERE m.room_id=? ORDER BY m.created_at DESC LIMIT 100').all(room.id);
-    res.json({ room: { ...room, owner: room.owner_id === req.user.id }, members: members.map(member => ({ ...member, online: Date.now() - new Date(member.last_seen_at).getTime() < HEARTBEAT_GRACE_MS })), messages: messages.reverse(), timer: await studyTimerSummary(db, room.id, req.user.id) });
+    const timer = await studyTimerSummary(db, room.id, req.user.id);
+    const sessions = await db.prepare('SELECT user_id,started_at,ended_at,last_heartbeat_at FROM study_room_sessions WHERE room_id=?').all(room.id);
+    const now = Date.now(), { totals, active } = summarizeMemberStudy(sessions, now);
+    const roomLeaderboard = members.map(member => ({
+      user_id: member.id, name: member.name, profile_image: member.profile_image || null,
+      study_seconds: Math.floor(totals.get(member.id) || 0),
+      active: active.has(member.id), me: member.id === req.user.id
+    })).sort((a, b) => b.study_seconds - a.study_seconds || String(a.name).localeCompare(String(b.name))).map((row, index) => ({ ...row, rank: index + 1 }));
+    res.json({
+      room: { ...room, owner: room.owner_id === req.user.id },
+      members: members.map(member => ({ ...member, online: now - (millis(member.last_seen_at) || 0) < HEARTBEAT_GRACE_MS })),
+      messages: messages.reverse(), timer, room_leaderboard: roomLeaderboard,
+      room_progress: { total_focused_seconds: roomLeaderboard.reduce((sum, row) => sum + row.study_seconds, 0), sessions: sessions.length, active_members: active.size }
+    });
   });
 
   app.post('/api/study-rooms/:id/messages', auth, async (req, res) => {

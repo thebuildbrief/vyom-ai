@@ -4,10 +4,10 @@
   "private": true,
   "type": "module",
   "engines": {
-    "node": ">=20"
+    "node": "22.x"
   },
   "scripts": {
-    "dev": "node --watch server/index.js",
+    "dev": "node --watch server/dev.js",
     "start": "node server/index.js",
     "test": "node --test",
     "migrate:neon:schema": "node server/migrate-neon-schema.js",

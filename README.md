@@ -29,7 +29,7 @@ Each folder has its own `package.json`, lockfile, environment example and deploy
 
 ## Local development
 
-Requirements: Node.js 20+ and npm.
+Requirements: Node.js 22.x and npm.
 
 ```powershell
 npm run install:all
@@ -63,6 +63,7 @@ npm run build
 |---|---|
 | Root Directory | `frontend` |
 | Framework preset | Vite |
+| Node.js version | `22.x` |
 | Build command | `npm run build` |
 | Output directory | `dist` |
 | Install command | `npm install` (default) |
@@ -92,6 +93,7 @@ Optional: `VITE_GOOGLE_CLIENT_ID` for the Google sign-in button. It must match t
 |---|---|
 | Root Directory | `backend` |
 | Framework preset | Other |
+| Node.js version | `22.x` |
 | Build command | none |
 | Output directory | none |
 | Install command | `npm install` (default) |

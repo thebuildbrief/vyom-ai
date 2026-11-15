@@ -61,6 +61,11 @@ test('friends and study room routes persist data and enforce membership ownershi
   await call('alice', 'POST', '/api/study-rooms/:id/timer/start', { params: { id: roomId } });
   assert.equal(raw.prepare('SELECT count(*) AS n FROM study_room_sessions WHERE room_id=? AND user_id=? AND ended_at IS NULL').get(roomId, 'alice').n, 1);
   assert.equal((await call('bob', 'POST', '/api/study-rooms/:id/timer/start', { params: { id: roomId } })).body.timer.active_members, 2);
+  const activeView = await call('alice', 'GET', '/api/study-rooms/:id', { params: { id: roomId } });
+  assert.equal(activeView.body.room_leaderboard.length, 2);
+  assert.equal(activeView.body.room_progress.active_members, 2);
+  assert.equal(activeView.body.room_progress.sessions, 2);
+  assert.ok(activeView.body.room_leaderboard.every(row => row.active));
   await new Promise(resolve => setTimeout(resolve, 1100));
   await call('alice', 'POST', '/api/study-rooms/:id/timer/heartbeat', { params: { id: roomId } });
   await call('bob', 'POST', '/api/study-rooms/:id/timer/heartbeat', { params: { id: roomId } });
@@ -70,6 +75,32 @@ test('friends and study room routes persist data and enforce membership ownershi
   assert.ok(bobTimer.body.timer.individual_seconds >= 1);
   assert.ok(bobTimer.body.timer.group_seconds >= aliceTimer.body.timer.individual_seconds);
   assert.ok(bobTimer.body.timer.group_seconds <= aliceTimer.body.timer.individual_seconds + bobTimer.body.timer.individual_seconds);
+  const finishedView = await call('alice', 'GET', '/api/study-rooms/:id', { params: { id: roomId } });
+  assert.equal(finishedView.body.room_progress.sessions, 2);
+  assert.ok(finishedView.body.room_leaderboard.every(row => row.study_seconds >= 1));
+  assert.equal(finishedView.body.room_progress.total_focused_seconds, finishedView.body.room_leaderboard.reduce((sum, row) => sum + row.study_seconds, 0));
+
+  raw.prepare("INSERT INTO submissions(id,interview_id,user_id,language,result,problem_key,mode) VALUES('bob-submission','bob-interview','bob','Python',?,'two-sum','submit')").run(JSON.stringify({ passed: 3, total: 3 }));
+  const allTime = await call('alice', 'GET', '/api/leaderboard', { query: { scope: 'friends', period: 'all' } });
+  assert.equal(allTime.body.leaderboard.length, 2);
+  const bobRow = allTime.body.leaderboard.find(row => row.id === 'bob');
+  assert.equal(bobRow.coding_solved, 1);
+  assert.equal(bobRow.coding_passed, 3);
+  assert.ok(bobRow.study_seconds >= 1);
+  assert.equal(bobRow.points_breakdown.coding, 30);
+  assert.equal(allTime.body.leaderboard.reduce((top, row) => Math.max(top, row.points), 0), allTime.body.leaderboard[0].points);
+
+  raw.prepare("INSERT INTO interviews(id,user_id,status) VALUES('eve-interview','eve','completed')").run();
+  raw.prepare("INSERT INTO reports(id,interview_id,user_id,overall_score,created_at) VALUES('eve-old-report','eve-interview','eve',100,'2000-01-01T00:00:00.000Z')").run();
+  const weeklyGlobal = await call('alice', 'GET', '/api/leaderboard', { query: { scope: 'global', period: 'weekly' } });
+  assert.equal(weeklyGlobal.body.scope, 'global');
+  assert.equal(weeklyGlobal.body.period, 'weekly');
+  const eveWeekly = weeklyGlobal.body.leaderboard.find(row => row.id === 'eve');
+  assert.equal(eveWeekly.completed_interviews, 0);
+  assert.equal(eveWeekly.points, 0);
+  const oldGlobal = await call('alice', 'GET', '/api/leaderboard', { query: { scope: 'global', period: 'all' } });
+  assert.equal(oldGlobal.body.leaderboard.find(row => row.id === 'eve').completed_interviews, 1);
+
   assert.equal((await call('bob', 'DELETE', '/api/study-rooms/:id', { params: { id: roomId } })).status, 404);
   assert.equal((await call('alice', 'DELETE', '/api/study-rooms/:id', { params: { id: roomId } })).status, 200);
 });

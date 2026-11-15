@@ -17,7 +17,7 @@ function fixture(){
 }
 async function invoke(f,route,{params={id:'interview-1'},body={}}={}){
   const handlers=f.routes.get(`POST ${route}`);assert.ok(handlers,`registered POST ${route}`);
-  const req={params,body,user:null,headers:{},get:()=>''};
+  const req={params,body,user:null,headers:{},get:()=>'',app:{locals:{db:f.db}}};
   const res={statusCode:200,headers:{},status(code){this.statusCode=code;return this},json(data){this.body=data;return this},setHeader(name,value){this.headers[name]=value;return this}};
   const run=async index=>{const handler=handlers[index];if(index===handlers.length-1)return handler(req,res);return handler(req,res,()=>run(index+1))};
   await run(0);return res;
@@ -48,4 +48,16 @@ test('Realtime session fails closed when server credentials are absent',async t=
   t.after(()=>{if(previous===undefined)delete process.env.OPENAI_API_KEY;else process.env.OPENAI_API_KEY=previous;f.raw.close()});
   const res=await invoke(f,'/api/interviews/:id/voice/session');
   assert.equal(res.statusCode,503);assert.match(res.body.error,/OPENAI_API_KEY/);
+});
+
+test('Concurrent interview start requests save one opening question',async t=>{
+  const f=fixture(),previous=process.env.OPENAI_API_KEY,oldFetch=globalThis.fetch;
+  t.after(()=>{globalThis.fetch=oldFetch;if(previous===undefined)delete process.env.OPENAI_API_KEY;else process.env.OPENAI_API_KEY=previous;f.raw.close()});
+  process.env.OPENAI_API_KEY='server-test-secret';
+  globalThis.fetch=async()=>new Response(JSON.stringify({choices:[{message:{content:'Tell me about a project.'}}]}),{status:200,headers:{'content-type':'application/json'}});
+  const waitForBody=async res=>{for(let i=0;i<200&&!res.body;i+=1)await new Promise(resolve=>setTimeout(resolve,10));return res};
+  const [first,second]=await Promise.all([invoke(f,'/api/interviews/:id/start'),invoke(f,'/api/interviews/:id/start')]);
+  await Promise.all([waitForBody(first),waitForBody(second)]);
+  assert.equal(first.statusCode,200);assert.equal(second.statusCode,200);
+  assert.equal(f.raw.prepare('SELECT COUNT(*) n FROM messages WHERE interview_id=?').get('interview-1').n,1);
 });
