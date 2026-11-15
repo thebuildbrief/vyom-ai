@@ -1,10 +1,11 @@
 node_modules/
 dist/
+frontend/dist/
 
 .env
 .env.*
 !.env.example
 
 .neon
-server/data/
-server/uploads/
+backend/server/data/
+backend/server/uploads/

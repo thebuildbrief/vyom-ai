@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 
 async function api(path, options = {}) {
-  const response = await fetch(`${(import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '')}/api${path}`, {
+  const response = await fetch(`${(import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '')}/api${path}`, {
     credentials: 'include',
     cache: 'no-store',
     ...options,

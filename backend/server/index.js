@@ -13,6 +13,7 @@ import { installAiRoutes } from './ai-coding-routes.js';
 import { installCommunityRoutes, summarizeTimerSessions } from './community-routes.js';
 
 const app = express();
+app.set('trust proxy', 1);
 const port = Number(process.env.PORT || 4000);
 const secret = process.env.JWT_SECRET || 'development-only-change-me';
 if (process.env.NODE_ENV === 'production' && (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32)) {
@@ -31,7 +32,7 @@ for (const method of ['get', 'post', 'put', 'patch', 'delete']) {
 }
 
 const allowedOrigins = ['https://vyom-ai-flame.vercel.app', process.env.CLIENT_ORIGIN, process.env.APP_ORIGIN, process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : null]
-  .filter(Boolean).flatMap(value => value.split(',')).map(value => value.trim()).filter(Boolean);
+  .filter(Boolean).flatMap(value => value.split(',')).map(value => value.trim().replace(/\/+$/, '')).filter(Boolean);
 if (!allowedOrigins.length) allowedOrigins.push('http://localhost:5173');
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' }, contentSecurityPolicy: { directives: {
   'default-src': ["'self'"], 'script-src': ["'self'", 'https://accounts.google.com'],

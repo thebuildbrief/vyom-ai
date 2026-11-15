@@ -1,5 +1,4 @@
 import './load-env.js';
-import Database from 'better-sqlite3';
 import { Pool } from 'pg';
 import { attachDatabasePool } from '@vercel/functions';
 import fs from 'node:fs';
@@ -26,6 +25,7 @@ if (postgres) {
     async close() { return pool.end(); }
   };
 } else {
+  const { default: Database } = await import('better-sqlite3');
   const filename = process.env.DATABASE_PATH || './server/data/vyom.sqlite';
   fs.mkdirSync(path.dirname(filename), { recursive: true });
   const sqlite = new Database(filename);

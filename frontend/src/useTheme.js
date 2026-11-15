@@ -3,8 +3,8 @@ import { themes } from './themes.js';
 
 export function useTheme() {
   const [theme, setTheme] = useState(() => {
-    try { return themes.some(item => item.id === localStorage.getItem('vyom-theme')) ? localStorage.getItem('vyom-theme') : 'original'; }
-    catch { return 'original'; }
+    try { return themes.some(item => item.id === localStorage.getItem('vyom-theme')) ? localStorage.getItem('vyom-theme') : 'midnight'; }
+    catch { return 'midnight'; }
   });
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
