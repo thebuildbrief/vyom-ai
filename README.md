@@ -44,7 +44,7 @@ npm run dev:api
 npm run dev:web
 ```
 
-Open `http://localhost:5173`. Vite proxies `/api` to `http://localhost:4000`, so `VITE_API_BASE_URL` can stay empty locally. Without `DATABASE_URL`, the API uses SQLite at `backend/server/data/vyom.sqlite` relative to the backend working directory. Set a random `JWT_SECRET` before using real accounts.
+Open `http://localhost:5173`. Vite proxies `/api` to `http://localhost:4000`, so `VITE_API_BASE_URL` can stay empty locally. `npm run dev:api` always uses SQLite at `backend/server/data/vyom.sqlite` and ignores any deployment `DATABASE_URL` found in env files; run `node server/index.js` directly only when you intentionally want the API to use Postgres. `npm run preview` proxies `/api` to the same backend for production-build checks. Set a random `JWT_SECRET` before using real accounts.
 
 Run checks:
 
@@ -84,7 +84,7 @@ Rules for `VITE_API_BASE_URL`:
 
 Optional: `VITE_GOOGLE_CLIENT_ID` for the Google sign-in button. It must match the backend `GOOGLE_CLIENT_ID`.
 
-`frontend/vercel.json` rewrites every non-asset path to `index.html`, so direct navigation and refresh work for all manual-router pages, including `/dashboard`, `/interview/...`, `/dashboard/friends`, `/dashboard/study`, and `/dashboard/resume`.
+`frontend/vercel.json` rewrites every non-asset path to `index.html`, so direct navigation and refresh work for all manual-router pages, including `/dashboard`, `/interview/...`, `/dashboard/friends`, `/dashboard/study`, `/dashboard/resume`, `/dashboard/coding`, `/interview/:id/coding`, and `/interview/:id/report`.
 
 ### Backend project
 
@@ -135,7 +135,7 @@ Do not set `PORT` or `DATABASE_PATH` in Vercel. Do not add backend secrets with 
 
 The frontend and backend are different origins. The backend already:
 
-- Allows credentialed CORS only for the exact origins in `CLIENT_ORIGIN`, `APP_ORIGIN`, the original production origin, and the backend's own `VERCEL_URL`.
+- Allows credentialed CORS only for the exact origins in `CLIENT_ORIGIN`, `APP_ORIGIN`, the original production origin, and the backend's own `VERCEL_URL`. Local development additionally accepts any `http://localhost:<port>` or `http://127.0.0.1:<port>` origin.
 - Rejects unsafe API requests whose `Origin` is not allowlisted.
 - Uses HTTP-only JWT cookies and `Trust proxy` for rate limiting behind Vercel.
 
@@ -156,7 +156,7 @@ Add the Google OAuth authorized JavaScript origin for the frontend domain if Goo
 
 The live Neon branch is read with the pooled `DATABASE_URL` at runtime. Schema and data migration tooling uses the direct `DATABASE_URL_UNPOOLED` URL.
 
-Existing live Neon data from the earlier audit was at schema versions 1-2 and did not include the friendships, study-room, study-timer, or `resumes.analysis` schema. Those changes are implemented as additive, idempotent migrations and have **not** been run by this preparation task.
+Existing live Neon data from the earlier audit was at schema versions 1-2 and did not include the friendships, study-room, study-timer, `resumes.analysis`, interview setup, or coding-workspace schema. Those changes are implemented as additive, idempotent migrations and have **not** been run by this preparation task. Schema version 6 adds `interviews.experience_level`, `interviews.interview_language`, `submissions.problem_key`, and `submissions.mode`; the coding workspace reuses the existing `interviews` and `submissions` tables. Version mapping: v3 adds friendships and study rooms, members and messages; v4 adds study-room timer sessions; v5 adds `resumes.analysis`; v6 adds the interview setup and coding submission columns plus the user-submission index.
 
 To apply schema only, after explicit approval and after confirming the branch is correct:
 
@@ -173,17 +173,28 @@ Before running either command:
 - Back up the target Neon branch or use a Neon branch/restore point.
 - Confirm `DATABASE_URL_UNPOOLED` points at the intended branch, not production by accident.
 - Never run destructive SQL to "clean up" migration state.
-- The migration adds tables, indexes, `users.email_verified`, `users.google_sub`, `users.profile_image`, and `resumes.analysis`; it does not drop or rewrite existing tables or rows.
+- The migration adds tables, indexes, `users.email_verified`, `users.google_sub`, `users.profile_image`, `resumes.analysis`, interview setup columns, and coding submission columns; it does not drop or rewrite existing tables or rows.
 
 ## Implemented functionality
 
 - Authentication: registration, login/logout, email verification/resend, forgot/reset/change password, Google ID-token verification, HTTP-only JWT cookies, profile and settings.
-- Interviews: owned interview creation and history, persisted conversation turns, AI opening/follow-up questions, evidence-based evaluation, report download and analytics.
-- Voice: server-issued short-lived OpenAI Realtime client secret, browser WebRTC microphone session, ordered transcript persistence, mute/pause/resume/stop controls.
+- Interviews: owned interview creation and history with role, experience level, difficulty, interview language and type; persisted conversation turns; AI opening/follow-up questions; evidence-based evaluation; saved report with performance categories, strengths, growth areas, recommended practice and next difficulty; report download and analytics.
+- Voice: server-issued short-lived OpenAI Realtime client secret, browser WebRTC microphone session, ordered transcript persistence, microphone analyser waveform, live AI/mic/timer status, and mute/pause/resume/stop controls. Missing credentials fail closed with an explicit error instead of a simulated interview.
 - Resumes: PDF validation, text extraction, evidence-based AI analysis, analysis-aware interview context, private Blob/S3 storage, owner-only retrieval and deletion, optional local OCR.
-- Coding: JDoodle execution for C++, Java, Python and JavaScript, test-case comparison, persisted submissions and coding evidence. Missing credentials return HTTP 503 rather than simulated output.
+- Coding Lab: JDoodle execution for C++, Java, Python and JavaScript, syntax-highlighted editor overlay, language selection, custom input, Run and Submit modes, per-test pass/fail with hidden tests masked on run, problem statements/constraints/examples, Easy/Medium/Hard filters, progress, and persisted submission history. Missing credentials return HTTP 503 rather than simulated output.
 - Dashboard: user-scoped statistics, interview history filters and report records.
-- Community: email friend requests, accepted-friend leaderboard, invite-code study rooms, member-only persisted chat, and per-member study timer intervals. Group time is the union of overlapping intervals, avoiding double counting. Presence uses heartbeats and five-second polling, which is compatible with Vercel Functions.
+- Community: email friend requests, accepted-friend and global leaderboards with weekly/all-time filters and top-three podium, invite-code study rooms, member-only persisted chat, per-member and group study timers, and room progress/leaderboard. Points come from completed interviews, report scores, passed coding tests and tracked study time; weekly boards cover the last seven days. Group time is the union of overlapping intervals, avoiding double counting. Presence uses heartbeats and five-second polling, which is compatible with Vercel Functions.
+
+### API surface added or extended
+
+| Area | Endpoints |
+|---|---|
+| Leaderboards | `GET /api/leaderboard?scope=friends\|global&period=all\|weekly` |
+| Study rooms | `GET/POST /api/study-rooms`, `POST /api/study-rooms/join`, `GET/DELETE /api/study-rooms/:id`, `POST /api/study-rooms/:id/messages`, `POST /api/study-rooms/:id/timer/start`, `POST /api/study-rooms/:id/timer/stop`, `POST /api/study-rooms/:id/timer/heartbeat`, `DELETE /api/study-rooms/:id/membership` |
+| Coding | `GET /api/coding/problems`, `GET /api/coding/progress`, `GET/POST /api/coding/workspace`, `POST /api/interviews/:id/code` with `mode=run\|submit` |
+| Interview setup and report | `POST /api/interviews` accepts `experience_level` and `interview_language`; `GET /api/interviews/:id/report` and `/report/download` return the saved report |
+
+Run and submit both execute through JDoodle. Run uses the custom input; submit validates the server-side test set, masks hidden test details in the response, and records the submission against the user's coding progress.
 
 ## Health check and validation
 
@@ -202,10 +213,11 @@ Before launch, verify with real credentials on a Vercel preview:
 1. `GET /api/health` returns 200 and `database: postgres`.
 2. Sign up, sign in, refresh, and sign out from the deployed frontend.
 3. Upload a PDF resume and open Preview; confirm the request goes to the backend origin.
-4. Create an interview, send a message, open the report, and download it.
-5. Start a voice session with microphone permission and confirm transcript rows persist.
-6. Run code in the playground and confirm JDoodle output or a clear 503 when unconfigured.
-7. Use two accounts to test friend requests, leaderboard, study-room chat, and individual/group timers.
+4. Create an interview, send a message, open the report, confirm performance, strengths, growth areas and recommended practice, then download it.
+5. Start a voice session with microphone permission and confirm AI speech, mic levels, status changes and transcript rows persist.
+6. Open Code Lab, run code with custom input, submit a solution, and confirm per-test results and submission history. An unconfigured JDoodle returns a clear 503.
+7. Use two accounts to test friend requests, weekly/all-time leaderboards, study-room chat, room leaderboard, and individual/group timers.
+8. Refresh each route directly, including `/dashboard/coding`, `/dashboard/friends`, `/dashboard/study`, `/interview/:id/coding`, and `/interview/:id/report`.
 
 ## Known limits and remaining manual steps
 
