@@ -21,10 +21,11 @@ backend/
   server/
   vercel.json
   package.json
+vercel.json
 README.md
 ```
 
-Each folder has its own `package.json`, lockfile, environment example and deployment configuration. Vercel should use each folder as a separate project Root Directory.
+Each folder has its own `package.json`, lockfile, environment example and deployment configuration. Vercel should use each folder as a separate project Root Directory. The root `postinstall` installs the frontend dependencies, and the root `vercel.json` is a fallback for an existing frontend project that still builds from the repository root.
 
 ## Local development
 
@@ -65,6 +66,8 @@ npm run build
 | Build command | `npm run build` |
 | Output directory | `dist` |
 | Install command | `npm install` (default) |
+
+If an existing Vercel frontend project still uses the repository root instead of `frontend`, the root `postinstall` installs `frontend` dependencies and the root `vercel.json` sets the output directory to `frontend/dist`. The `frontend` Root Directory remains the recommended configuration.
 
 Required frontend environment variable:
 
