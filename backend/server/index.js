@@ -11,7 +11,7 @@ import { installAccountRoutes } from './accounts.js';
 import { installResumeRoutes } from './resume-routes.js';
 import { installAiRoutes } from './ai-coding-routes.js';
 import { installCommunityRoutes, summarizeTimerSessions } from './community-routes.js';
-import { hasObjectStorage } from './private-storage.js';
+import { hasResumeStorage } from './private-storage.js';
 
 const app = express();
 app.set('trust proxy', 1);
@@ -84,7 +84,7 @@ app.get('/api/config', (_req, res) => {
     aiChatConfigured: aiConfigured,
     realtimeVoiceConfigured: aiConfigured,
     codeExecutionConfigured: Boolean(process.env.JDOODLE_CLIENT_ID && process.env.JDOODLE_CLIENT_SECRET),
-    resumeStorageConfigured: hasObjectStorage(),
+    resumeStorageConfigured: hasResumeStorage(),
     emailConfigured: Boolean(process.env.MAIL_API_KEY && process.env.MAIL_FROM),
     googleSignInConfigured: Boolean(process.env.GOOGLE_CLIENT_ID),
     demoAccountsEnabled: process.env.DEMO_ACCOUNTS === 'true'

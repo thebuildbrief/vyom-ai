@@ -4,6 +4,8 @@ const hash=s=>crypto.createHash('sha256').update(s).digest('hex');
 const hmac=(key,value,encoding)=>crypto.createHmac('sha256',key).update(value).digest(encoding);
 const encodePath=s=>s.split('/').map(encodeURIComponent).join('/');
 export function hasObjectStorage(){return !!(process.env.S3_BUCKET&&process.env.S3_ACCESS_KEY_ID&&process.env.S3_SECRET_ACCESS_KEY)}
+export function hasResumeStorage(){return Boolean(process.env.BLOB_READ_WRITE_TOKEN)||hasObjectStorage()}
+export function storageProvider(){if(process.env.BLOB_READ_WRITE_TOKEN)return 'blob';if(hasObjectStorage())return 's3';return process.env.VERCEL||process.env.NODE_ENV==='production'?'none':'local'}
 export async function objectRequest(method,key,body,contentType='application/octet-stream'){
   const endpoint=new URL(process.env.S3_ENDPOINT||`https://s3.${process.env.S3_REGION||'us-east-1'}.amazonaws.com`),bucket=process.env.S3_BUCKET,region=process.env.S3_REGION||'us-east-1',pathStyle=process.env.S3_PATH_STYLE==='true';
   const host=pathStyle?endpoint.host:`${bucket}.${endpoint.host}`,uri=`${endpoint.pathname.replace(/\/$/,'')}${pathStyle?`/${bucket}`:''}/${encodePath(key)}`.replace(/^\/\//,'/'),url=`${endpoint.protocol}//${host}${uri}`;

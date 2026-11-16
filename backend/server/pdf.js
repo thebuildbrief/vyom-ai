@@ -1,5 +1,6 @@
 import zlib from 'node:zlib';
 import { spawn } from 'node:child_process';
+import * as mammoth from 'mammoth';
 
 function decodeLiteral(value) {
   return value.replace(/\\([0-7]{1,3})|\\(n|r|t|b|f|\(|\)|\\)|\\\r?\n/g, (_, octal, escape) => {
@@ -40,6 +41,13 @@ export function extractPdfText(buffer) {
     chunks.push(...readTextOperators(data));
   }
   return chunks.join(' ').replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+export async function extractDocxText(buffer) {
+  try {
+    const { value } = await mammoth.extractRawText({ buffer });
+    return String(value || '').replace(/\s+/g, ' ').trim();
+  } catch { return ''; }
 }
 
 export async function tryOcrPdf(filePath) {

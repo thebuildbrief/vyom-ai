@@ -51,7 +51,7 @@ export default function DashboardOverview({ api }) {
           ? <div className="empty-state"><p>Your global ranking will appear after your first activity.</p></div>
           : <div className="history-row">
             <div><b>Global rank #{ranking.rank} · {Number(ranking.points).toLocaleString()} points</b><small>{ranking.completed_interviews} completed interviews · {ranking.average_score == null ? 'No report score yet' : `${ranking.average_score}% average`}</small></div>
-            <Link to="/dashboard/friends">Leaderboard →</Link>
+            <Link to="/dashboard/leaderboard">Leaderboard →</Link>
           </div>}
     </section>
     <section className="dash-panel">

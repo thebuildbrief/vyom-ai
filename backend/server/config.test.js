@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 
-const keys = ['DATABASE_URL', 'DATABASE_PATH', 'NODE_ENV', 'VERCEL', 'OPENAI_API_KEY', 'JDOODLE_CLIENT_ID', 'JDOODLE_CLIENT_SECRET', 'S3_BUCKET', 'S3_ACCESS_KEY_ID', 'S3_SECRET_ACCESS_KEY', 'MAIL_API_KEY', 'MAIL_FROM', 'GOOGLE_CLIENT_ID', 'DEMO_ACCOUNTS'];
+const keys = ['DATABASE_URL', 'DATABASE_PATH', 'NODE_ENV', 'VERCEL', 'OPENAI_API_KEY', 'JDOODLE_CLIENT_ID', 'JDOODLE_CLIENT_SECRET', 'BLOB_READ_WRITE_TOKEN', 'S3_ENDPOINT', 'S3_BUCKET', 'S3_REGION', 'S3_PATH_STYLE', 'S3_SESSION_TOKEN', 'S3_ACCESS_KEY_ID', 'S3_SECRET_ACCESS_KEY', 'MAIL_API_KEY', 'MAIL_FROM', 'GOOGLE_CLIENT_ID', 'DEMO_ACCOUNTS'];
 
 async function startServer(t) {
   const previous = Object.fromEntries(keys.map(key => [key, process.env[key]]));
@@ -56,6 +56,17 @@ test('config endpoint reports only boolean capability flags and leaks no secrets
   });
   assert.ok(!JSON.stringify(body).includes('test-key-that-must-not-leak'));
   assert.ok(!JSON.stringify(body).includes('s3-secret'));
+});
+
+test('config endpoint recognises Vercel Blob as private resume storage', async t => {
+  const base = await startServer(t);
+  process.env.BLOB_READ_WRITE_TOKEN = 'vercel_blob_rw_test';
+
+  const response = await fetch(`${base}/api/index.js?__api_path=%2Fapi%2Fconfig`);
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.resumeStorageConfigured, true);
+  assert.ok(!JSON.stringify(body).includes('vercel_blob_rw_test'));
 });
 
 test('config endpoint flags capabilities as false when env vars are missing', async t => {
