@@ -145,6 +145,18 @@ Feature credentials (optional; endpoints fail closed with an explicit error when
 
 Do not set `PORT` or `DATABASE_PATH` in Vercel. Do not add backend secrets with a `VITE_` prefix.
 
+### Render backend + Vercel frontend
+
+`render.yaml` at the repository root deploys the Express API to Render while the SPA stays on Vercel.
+
+1. Render Dashboard -> **New** -> **Blueprint** -> select this repository and apply the `vyom-ai-api` service (Singapore region, free plan, root directory `backend`, build `npm ci`, start `npm start`, health check `/api/health`).
+2. When prompted, enter `DATABASE_URL` (the pooled Neon URL), a `JWT_SECRET` of at least 32 random characters, `OPENAI_API_KEY`, and the JDoodle client ID and secret. Add optional variables (`S3_*`, `MAIL_*`, `GOOGLE_CLIENT_ID`) in the service's Environment tab afterwards.
+3. Confirm `https://<render-service>.onrender.com/api/health` returns `{"status":"ok","database":"postgres"}`.
+4. In the Vercel project set `VITE_API_BASE_URL` to the Render origin, for example `https://vyom-ai-api.onrender.com` (no `/api`, no trailing slash), then redeploy the frontend because Vite embeds the value at build time.
+5. Keep `CLIENT_ORIGIN` and `APP_ORIGIN` equal to the exact Vercel origin and `COOKIE_SAME_SITE=none`. Cookies travel from the Vercel page to the Render API as third-party cookies, so browsers that block them reject sign-in; custom domains under one registrable domain with `COOKIE_SAME_SITE=lax` are the reliable long-term setup.
+
+Render's free instance sleeps after 15 minutes of inactivity, so the first request afterwards can take about a minute, and its filesystem is ephemeral: without `BLOB_READ_WRITE_TOKEN` or `S3_*`, resume uploads return 503 and locally stored files disappear on redeploy. Neon migrations are not run by the start command; run them separately with `DATABASE_URL_UNPOOLED`.
+
 ### Cross-origin authentication
 
 The frontend and backend are different origins. The backend already:

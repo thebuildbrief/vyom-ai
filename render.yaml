@@ -1,0 +1,36 @@
+services:
+  - type: web
+    name: vyom-ai-api
+    runtime: node
+    plan: free
+    region: singapore
+    rootDir: backend
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: "22"
+      - key: CLIENT_ORIGIN
+        value: https://vyom-ai-flame.vercel.app
+      - key: APP_ORIGIN
+        value: https://vyom-ai-flame.vercel.app
+      - key: COOKIE_SAME_SITE
+        value: none
+      - key: PGSSLMODE
+        value: require
+      - key: PG_POOL_MAX
+        value: "5"
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: JDOODLE_CLIENT_ID
+        sync: false
+      - key: JDOODLE_CLIENT_SECRET
+        sync: false
