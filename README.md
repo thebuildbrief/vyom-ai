@@ -239,4 +239,5 @@ Before launch, verify with real credentials on a Vercel preview:
 - The frontend resume library sends multipart uploads through the backend function. Vercel's request-body limit applies (roughly 4 MB in practice); use a smaller PDF or the existing Blob client-upload endpoint for larger files.
 - `npm audit` may report moderate React Router advisories. The suggested fix upgrades to React Router 7 and is a breaking change, so it was not applied automatically.
 - Scanned-PDF OCR needs Poppler/Tesseract binaries and is intended for local use unless those executables are bundled.
+- Browser speech-to-text (the Speak button and the homepage mic demo) uses the Web Speech API, which is available in Chrome and Edge on desktop. Firefox and Safari are not supported for speech-to-text; typing and realtime voice still work there. Read-aloud uses the Speech Synthesis API, which Chrome, Edge and Safari support.
 - Do not push, deploy, run production migrations, or change production environment variables until the migration target and environment values have been reviewed.

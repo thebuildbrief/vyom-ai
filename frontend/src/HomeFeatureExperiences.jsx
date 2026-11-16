@@ -149,7 +149,7 @@ export function VoiceDemo() {
         };
         recognition.start();
         setNotice('Live microphone waveform and browser speech recognition are active.');
-      } else setNotice('Live microphone waveform is active. Speech-to-text is not supported in this browser.');
+      } else setNotice('Live microphone waveform is active. Browser speech-to-text needs Chrome or Edge on desktop.');
       setStatus('Listening');
     } catch (e) {
       stoppedRef.current = true;

@@ -136,8 +136,14 @@ export default function VoiceSession({ interviewId, onTranscript, onStateChange,
         }
       };
       connection.onconnectionstatechange = () => {
-        if (connection.connectionState === 'failed' && !stopped.current) {
-          setError('Realtime voice connection failed. Check your network and try again.');
+        if (stopped.current) return;
+        if (connection.connectionState === 'disconnected') {
+          setError('Realtime voice connection interrupted. Trying to recover…');
+          try { connection.restartIce(); } catch { /* Older browsers may not support restartIce. */ }
+          return;
+        }
+        if (connection.connectionState === 'failed') {
+          setError('Realtime voice connection failed. Stop and start voice to try again.');
           release();
           updateState('error');
         }
@@ -157,6 +163,12 @@ export default function VoiceSession({ interviewId, onTranscript, onStateChange,
         }));
       };
       events.onerror = () => setError('The realtime event channel encountered a network error.');
+      events.onclose = () => {
+        if (stopped.current || channel.current !== events) return;
+        setError('Realtime voice session ended. Start voice again to continue.');
+        release(false);
+        updateState('error');
+      };
       events.onmessage = async event => {
         let data;
         try { data = JSON.parse(event.data); } catch { return; }
@@ -236,15 +248,21 @@ export default function VoiceSession({ interviewId, onTranscript, onStateChange,
     }
   }
 
+  async function stopVoice() {
+    try { await saveQueue.current; } catch { /* Failed saves already surfaced their own error. */ }
+    if (stopped.current) return;
+    release();
+  }
+
   return <div className="voice-control">
     <audio ref={audio} autoPlay />
     {state === 'idle' || state === 'error'
-      ? <button className="voice-toggle" onClick={start} disabled={disabled}>◖ Start realtime voice</button>
+      ? <button className="voice-toggle" onClick={start} disabled={disabled}>◖ {state === 'error' ? 'Retry realtime voice' : 'Start realtime voice'}</button>
       : <>
         <span className={`voice-status voice-${state}`} role="status">{state === 'connecting' ? 'Connecting…' : state === 'processing' ? 'AI processing…' : state === 'speaking' ? 'Interviewer speaking' : state === 'paused' ? 'Paused' : 'Listening'}</span>
         <button className="voice-toggle active" onClick={toggleMute} aria-pressed={muted}>{muted ? 'Unmute' : 'Mute'}</button>
         <button className="voice-toggle" onClick={togglePause} aria-pressed={paused}>{paused ? 'Resume' : 'Pause'}</button>
-        <button className="voice-toggle" onClick={() => release()}>Stop voice</button>
+        <button className="voice-toggle" onClick={() => { stopVoice(); }}>Stop voice</button>
       </>}
     {error && <span className="voice-error" role="status">{error}</span>}
   </div>;

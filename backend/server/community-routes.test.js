@@ -127,3 +127,62 @@ test('group study time is the union of overlapping per-member intervals', () => 
   assert.equal(totals.individual_seconds, 10);
   assert.equal(totals.group_seconds, 15);
 });
+
+test('leaderboard edge cases: tie-breaks, weekly windows, privacy, scope isolation', async () => {
+  const raw = new Database(':memory:');
+  const db = { dialect: 'sqlite', prepare: raw.prepare.bind(raw), exec: raw.exec.bind(raw), pragma: raw.pragma.bind(raw), transaction: raw.transaction.bind(raw) };
+  migrate(db);
+  const insert = raw.prepare('INSERT INTO users(id,name,email,password,email_verified) VALUES(?,?,?,?,1)');
+  insert.run('amy', 'Amy', 'amy@example.test', 'hash');
+  insert.run('bea', 'Bea', 'bea@example.test', 'hash');
+  insert.run('cam', 'Cam', 'cam@example.test', 'hash');
+  raw.prepare("INSERT INTO interviews(id,user_id,status) VALUES('amy-i1','amy','completed'),('bea-i1','bea','completed'),('cam-i1','cam','completed')").run();
+  const week = 7 * 24 * 3600 * 1000;
+  const recent = new Date(Date.now() - 60_000).toISOString();
+  const old = new Date(Date.now() - week - 60_000).toISOString();
+  raw.prepare("INSERT INTO reports(id,interview_id,user_id,overall_score,created_at) VALUES('amy-r1','amy-i1','amy',80,?)").run(recent);
+  raw.prepare("INSERT INTO reports(id,interview_id,user_id,overall_score,created_at) VALUES('bea-r1','bea-i1','bea',80,?)").run(recent);
+  raw.prepare("INSERT INTO reports(id,interview_id,user_id,overall_score,created_at) VALUES('cam-r1','cam-i1','cam',80,?)").run(recent);
+  const routes = new Map();
+  const app = Object.fromEntries(['get', 'post', 'delete'].map(method => [method, (path, ...handlers) => routes.set(`${method.toUpperCase()} ${path}`, handlers)]));
+  const testSecret = 'community-test-secret-at-least-32-characters';
+  const tokens = Object.fromEntries(['amy', 'bea', 'cam'].map(id => [id, jwt.sign({ id }, testSecret)]));
+  const auth = (req, res, next) => {
+    try { req.user = jwt.verify(req.headers.authorization?.replace(/^Bearer /, '') || '', testSecret); return next(); }
+    catch { res.status(401).json({ error: 'Please sign in to continue.' }); }
+  };
+  installCommunityRoutes(app, { db, auth });
+  const call = async (user, path, query = {}) => {
+    const handlers = routes.get(`GET ${path}`);
+    const req = { headers: { authorization: `Bearer ${tokens[user] || ''}` }, params: {}, query, body: {} };
+    const response = { statusCode: 200, status(code) { this.statusCode = code; return this; }, json(data) { this.body = data; return this; } };
+    const run = async index => { const handler = handlers[index]; if (index === handlers.length - 1) return handler(req, response); return handler(req, response, () => run(index + 1)); };
+    await run(0);
+    return response.body;
+  };
+
+  // Equal points and equal completed counts fall back to name ascending for determinism.
+  const tied = await call('amy', '/api/leaderboard', { scope: 'global', period: 'all' });
+  assert.equal(tied.leaderboard.length, 3);
+  assert.equal(tied.leaderboard[0].name, 'Amy');
+  assert.equal(tied.leaderboard[1].name, 'Bea');
+  assert.equal(tied.leaderboard[2].name, 'Cam');
+  assert.ok(tied.leaderboard.every((row, index) => row.rank === index + 1));
+  assert.ok(tied.leaderboard.every(row => !('email' in row)));
+
+  // Study time outside the weekly window must not count toward the weekly board.
+  raw.prepare("INSERT INTO study_rooms(id,owner_id,name,join_code) VALUES('room','cam','Focus','EDGE1')").run();
+  raw.prepare("INSERT INTO study_room_sessions(id,room_id,user_id,started_at,ended_at,last_heartbeat_at) VALUES('cam-old','room','cam',?,?,?)").run(old, new Date(Date.now() - week).toISOString(), new Date(Date.now() - week).toISOString());
+  const weekly = await call('cam', '/api/leaderboard', { scope: 'global', period: 'weekly' });
+  const camWeekly = weekly.leaderboard.find(row => row.id === 'cam');
+  assert.equal(camWeekly.study_seconds, 0);
+  assert.equal(camWeekly.points_breakdown.study, 0);
+
+  // Friends scope never includes users outside the accepted friend set.
+  const amyFriends = await call('amy', '/api/leaderboard', { scope: 'friends', period: 'all' });
+  assert.deepEqual(amyFriends.leaderboard.map(row => row.id), ['amy']);
+  raw.prepare("INSERT INTO friendships(id,requester_id,addressee_id,status) VALUES('f1','amy','bea','accepted')").run();
+  const withFriend = await call('amy', '/api/leaderboard', { scope: 'friends', period: 'all' });
+  assert.deepEqual(withFriend.leaderboard.map(row => row.id).sort(), ['amy', 'bea']);
+  raw.close();
+});

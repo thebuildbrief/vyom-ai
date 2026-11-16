@@ -11,6 +11,7 @@ import { installAccountRoutes } from './accounts.js';
 import { installResumeRoutes } from './resume-routes.js';
 import { installAiRoutes } from './ai-coding-routes.js';
 import { installCommunityRoutes, summarizeTimerSessions } from './community-routes.js';
+import { hasObjectStorage } from './private-storage.js';
 
 const app = express();
 app.set('trust proxy', 1);
@@ -76,6 +77,18 @@ app.get('/api/auth/me', auth, async (req, res) => {
 app.get('/api/health', async (_req, res) => {
   try { if (db.dialect === 'postgres') await db.pool.query('SELECT 1'); else db.prepare('SELECT 1').get(); res.json({ status: 'ok', database: db.dialect }); }
   catch { res.status(503).json({ status: 'error', database: 'unavailable' }); }
+});
+app.get('/api/config', (_req, res) => {
+  const aiConfigured = Boolean(process.env.OPENAI_API_KEY);
+  res.json({
+    aiChatConfigured: aiConfigured,
+    realtimeVoiceConfigured: aiConfigured,
+    codeExecutionConfigured: Boolean(process.env.JDOODLE_CLIENT_ID && process.env.JDOODLE_CLIENT_SECRET),
+    resumeStorageConfigured: hasObjectStorage(),
+    emailConfigured: Boolean(process.env.MAIL_API_KEY && process.env.MAIL_FROM),
+    googleSignInConfigured: Boolean(process.env.GOOGLE_CLIENT_ID),
+    demoAccountsEnabled: process.env.DEMO_ACCOUNTS === 'true'
+  });
 });
 app.get('/api/dashboard', auth, async (req, res) => {
   const interviews = await db.prepare('SELECT id,role,type,difficulty,status,created_at FROM interviews WHERE user_id=? ORDER BY created_at DESC LIMIT 8').all(req.user.id);
