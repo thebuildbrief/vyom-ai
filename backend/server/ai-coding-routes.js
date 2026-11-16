@@ -19,12 +19,12 @@ export function installAiRoutes(app,{db,auth,owned}){
   app.get('/api/coding/progress',auth,async(req,res)=>{
     const rows=await db.prepare('SELECT id,interview_id,problem_key,mode,language,result,created_at FROM submissions WHERE user_id=? ORDER BY created_at DESC').all(req.user.id);
     const solved=new Set();let passedTests=0,totalTests=0;
-    for(const row of rows){let result={};try{result=JSON.parse(row.result||'{}')}catch{}const passed=Math.max(0,Number(result.passed)||0),total=Math.max(0,Number(result.total)||0);passedTests+=passed;totalTests+=total;if(row.problem_key&&total>0&&passed===total)solved.add(row.problem_key)}
+    for(const row of rows){if(row.mode!=='submit')continue;let result={};try{result=JSON.parse(row.result||'{}')}catch{}const passed=Math.max(0,Number(result.passed)||0),total=Math.max(0,Number(result.total)||0);passedTests+=passed;totalTests+=total;if(row.problem_key&&total>0&&passed===total)solved.add(row.problem_key)}
     const titles=new Map(codingProblems.map(problem=>[problem.key,problem.title]));
     res.json({
       stats:{submissions:rows.length,solved:solved.size,total_problems:codingProblems.length,passed_tests:passedTests,total_tests:totalTests},
       solved_problems:[...solved],
-      history:rows.slice(0,20).map(row=>{let result={};try{result=JSON.parse(row.result||'{}')}catch{}return{id:row.id,interview_id:row.interview_id,problem_key:row.problem_key||'',problem_title:titles.get(row.problem_key)||'Free practice',mode:row.mode||'run',language:row.language||'',passed:Number(result.passed)||0,total:Number(result.total)||0,created_at:row.created_at}})
+      history:rows.slice(0,20).map(row=>{let result={};try{result=JSON.parse(row.result||'{}')}catch{}const mode=row.mode||'run';return{id:row.id,interview_id:row.interview_id,problem_key:row.problem_key||'',problem_title:titles.get(row.problem_key)||'Free practice',mode,language:row.language||'',passed:mode==='submit'?Number(result.passed)||0:0,total:mode==='submit'?Number(result.total)||0:0,created_at:row.created_at}})
     });
   });
   app.post('/api/coding/workspace',auth,async(req,res)=>{

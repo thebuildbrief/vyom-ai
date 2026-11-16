@@ -1,0 +1,10 @@
+.env*
+**/.env*
+.neon
+**/.neon
+.vercel
+node_modules
+frontend/node_modules
+backend/node_modules
+backend/server/data
+backend/server/uploads

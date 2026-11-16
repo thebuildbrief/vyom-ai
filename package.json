@@ -6,7 +6,7 @@
     "node": "22.x"
   },
   "scripts": {
-    "postinstall": "npm --prefix frontend ci --include=dev --no-audit --no-fund",
+    "postinstall": "npm --prefix frontend ci --include=dev --no-audit --no-fund && npm --prefix backend ci --include=dev --no-audit --no-fund",
     "install:all": "npm --prefix frontend ci --include=dev --no-audit --no-fund && npm --prefix backend ci --include=dev --no-audit --no-fund",
     "dev:web": "npm --prefix frontend run dev",
     "dev:api": "npm --prefix backend run dev",

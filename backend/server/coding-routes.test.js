@@ -103,16 +103,19 @@ test('coding problems, workspace, real submit judging and progress history are b
   assert.equal(run.body.total, 1);
   assert.equal(run.body.test_results[0].passed, null);
   assert.equal(run.body.test_results[0].input, 'hello');
+  const unverifiedRun = await invoke(f, 'POST', '/api/interviews/:id/code', { body: { language: 'Python', source: 'print("0 1")', mode: 'run', problem_key: 'two-sum', test_cases: [{ input: 'arbitrary', expected_output: '0 1' }] } });
+  assert.equal(unverifiedRun.body.passed, 1);
 
   const progress = await invoke(f, 'GET', '/api/coding/progress');
-  assert.equal(progress.body.stats.submissions, 2);
+  assert.equal(progress.body.stats.submissions, 3);
   assert.equal(progress.body.stats.solved, 0);
   assert.equal(progress.body.stats.passed_tests, 2);
-  assert.equal(progress.body.stats.total_tests, 5);
+  assert.equal(progress.body.stats.total_tests, 4);
   const submitHistory = progress.body.history.find(item => item.mode === 'submit');
   const runHistory = progress.body.history.find(item => item.mode === 'run');
   assert.equal(submitHistory.problem_title, 'Two Sum');
   assert.equal(runHistory.language, 'Python');
+  assert.equal(runHistory.total, 0);
 });
 
 test('coding routes reject another user’s interview session', async t => {

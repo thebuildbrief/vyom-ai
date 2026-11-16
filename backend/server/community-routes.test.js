@@ -81,6 +81,7 @@ test('friends and study room routes persist data and enforce membership ownershi
   assert.equal(finishedView.body.room_progress.total_focused_seconds, finishedView.body.room_leaderboard.reduce((sum, row) => sum + row.study_seconds, 0));
 
   raw.prepare("INSERT INTO submissions(id,interview_id,user_id,language,result,problem_key,mode) VALUES('bob-submission','bob-interview','bob','Python',?,'two-sum','submit')").run(JSON.stringify({ passed: 3, total: 3 }));
+  raw.prepare("INSERT INTO submissions(id,interview_id,user_id,language,result,problem_key,mode) VALUES('bob-unverified-run','bob-interview','bob','Python',?,'two-sum','run')").run(JSON.stringify({ passed: 99, total: 99 }));
   const allTime = await call('alice', 'GET', '/api/leaderboard', { query: { scope: 'friends', period: 'all' } });
   assert.equal(allTime.body.leaderboard.length, 2);
   const bobRow = allTime.body.leaderboard.find(row => row.id === 'bob');
@@ -100,6 +101,18 @@ test('friends and study room routes persist data and enforce membership ownershi
   assert.equal(eveWeekly.points, 0);
   const oldGlobal = await call('alice', 'GET', '/api/leaderboard', { query: { scope: 'global', period: 'all' } });
   assert.equal(oldGlobal.body.leaderboard.find(row => row.id === 'eve').completed_interviews, 1);
+
+  insert.run('zoe', 'Zoe', 'zoe@example.test', 'hash');
+  tokens.zoe = jwt.sign({ id: 'zoe' }, testSecret);
+  const addUser = raw.prepare('INSERT INTO users(id,name,email,password,email_verified) VALUES(?,?,?,?,1)');
+  for (let index = 0; index < 101; index += 1) {
+    const name = `User ${String(index).padStart(3, '0')}`;
+    addUser.run(`ranking-${index}`, name, `ranking-${index}@example.test`, 'hash');
+  }
+  const longGlobal = await call('zoe', 'GET', '/api/leaderboard', { query: { scope: 'global', period: 'all' } });
+  assert.equal(longGlobal.body.leaderboard.length, 101);
+  assert.equal(longGlobal.body.leaderboard.at(-1).id, 'zoe');
+  assert.equal(longGlobal.body.leaderboard.at(-1).rank, 105);
 
   assert.equal((await call('bob', 'DELETE', '/api/study-rooms/:id', { params: { id: roomId } })).status, 404);
   assert.equal((await call('alice', 'DELETE', '/api/study-rooms/:id', { params: { id: roomId } })).status, 200);

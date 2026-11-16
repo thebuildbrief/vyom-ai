@@ -5,11 +5,12 @@ VYOM AI is a Vite/React interview practice platform backed by an Express API. Th
 - `frontend/` - Vite + React single-page application.
 - `backend/` - Express API exposed through one Vercel Function, with Neon PostgreSQL, private Blob/S3 resume storage, OpenAI and JDoodle integrations.
 
-No production deployment, GitHub push, production migration, or production setting change was performed while preparing this split.
+The existing root-based `vyom-ai` Vercel project deploys the frontend and API together. The frontend and backend can also be deployed separately using their app-folder configurations.
 
 ## Repository layout
 
 ```text
+api/index.js
 frontend/
   index.html
   vite.config.js
@@ -25,7 +26,7 @@ vercel.json
 README.md
 ```
 
-Each folder has its own `package.json`, lockfile, environment example and deployment configuration. Vercel should use each folder as a separate project Root Directory. The root `postinstall` installs the frontend dependencies, and the root `vercel.json` is a fallback for an existing frontend project that still builds from the repository root.
+Each app folder has its own `package.json`, lockfile, environment example and deployment configuration. The frontend and backend can be deployed as separate Vercel projects. The existing root-based `vyom-ai` project can also deploy both together: `api/index.js` forwards API requests to the backend function, while the root `vercel.json` sends other routes to the frontend SPA.
 
 ## Local development
 
@@ -68,24 +69,35 @@ npm run build
 | Output directory | `dist` |
 | Install command | `npm install` (default) |
 
-If an existing Vercel frontend project still uses the repository root instead of `frontend`, the root `postinstall` installs `frontend` dependencies and the root `vercel.json` sets the output directory to `frontend/dist`. The `frontend` Root Directory remains the recommended configuration.
+For the existing combined `vyom-ai` Vercel project, use these root settings:
+
+| Setting | Value |
+|---|---|
+| Root Directory | `.` |
+| Framework preset | Vite |
+| Node.js version | `22.x` |
+| Build command | `npm --prefix frontend run build` |
+| Output directory | `frontend/dist` |
+| Install command | `npm install` (root `postinstall` installs both app dependencies) |
+
+The root `vercel.json` routes `/api/*` to the Node API function before applying the SPA fallback. In this combined setup, set `VITE_API_BASE_URL` to the same production origin (for example `https://vyom-ai-flame.vercel.app`); keep it secret-free. For separate projects, use the backend project origin instead. The root `.vercelignore` excludes local environment files, SQLite data, uploads and installed dependencies from CLI deployments.
 
 Required frontend environment variable:
 
 | Variable | Value |
 |---|---|
-| `VITE_API_BASE_URL` | Backend project origin, for example `https://vyom-ai-api.vercel.app` |
+| `VITE_API_BASE_URL` | Same as the frontend origin for the combined project, or the backend project origin when split |
 
 Rules for `VITE_API_BASE_URL`:
 
-- Use the backend origin only. Do not append `/api`; the frontend adds `/api` itself.
+- Use the API origin (same as the frontend for the combined project). Do not append `/api`; the frontend adds `/api` itself.
 - Do not add a trailing slash.
 - It is a public build-time variable. Never put a secret in any `VITE_` variable.
 - Redeploy the frontend after changing it because Vite embeds it at build time.
 
 Optional: `VITE_GOOGLE_CLIENT_ID` for the Google sign-in button. It must match the backend `GOOGLE_CLIENT_ID`.
 
-`frontend/vercel.json` rewrites every non-asset path to `index.html`, so direct navigation and refresh work for all manual-router pages, including `/dashboard`, `/interview/...`, `/dashboard/friends`, `/dashboard/study`, `/dashboard/resume`, `/dashboard/coding`, `/interview/:id/coding`, and `/interview/:id/report`.
+`frontend/vercel.json` rewrites every non-asset path to `index.html` when deployed separately, so direct navigation and refresh work for all manual-router pages, including `/dashboard`, `/interview/...`, `/dashboard/friends`, `/dashboard/study`, `/dashboard/resume`, `/dashboard/coding`, `/interview/:id/coding`, and `/interview/:id/report`. The combined root project applies the same fallback after routing `/api/*` to the API function.
 
 ### Backend project
 

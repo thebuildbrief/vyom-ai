@@ -49,7 +49,7 @@ async function buildLeaderboard(db, userIds, { period, meId, now }) {
   const ids = users.map(user => user.id), marks = ids.map(() => '?').join(','), startMs = period === 'weekly' ? now - WEEK_MS : -Infinity;
   const [reports, submissions, sessions] = await Promise.all([
     db.prepare(`SELECT user_id,overall_score,created_at FROM reports WHERE user_id IN (${marks})`).all(...ids),
-    db.prepare(`SELECT id,user_id,problem_key,result,created_at FROM submissions WHERE user_id IN (${marks})`).all(...ids),
+    db.prepare(`SELECT id,user_id,problem_key,result,created_at FROM submissions WHERE user_id IN (${marks}) AND mode='submit'`).all(...ids),
     db.prepare(`SELECT user_id,started_at,ended_at,last_heartbeat_at FROM study_room_sessions WHERE user_id IN (${marks})`).all(...ids)
   ]);
   const activity = new Map(ids.map(id => [id, { completed: 0, scoreTotal: 0, codingPassed: 0, codingTotal: 0, solved: new Set(), studySeconds: 0 }]));
@@ -87,7 +87,11 @@ async function buildLeaderboard(db, userIds, { period, meId, now }) {
     };
   });
   rows.sort((a, b) => b.points - a.points || b.completed_interviews - a.completed_interviews || Number(b.average_score || 0) - Number(a.average_score || 0) || String(a.name).localeCompare(String(b.name)));
-  return rows.slice(0, 100).map((row, index) => ({ ...row, rank: index + 1 }));
+  const ranked = rows.map((row, index) => ({ ...row, rank: index + 1 }));
+  const top = ranked.slice(0, 100);
+  const currentUser = ranked.find(row => row.id === meId);
+  if (currentUser && !top.some(row => row.id === meId)) top.push(currentUser);
+  return top;
 }
 
 export function summarizeTimerSessions(sessions, userId, now) {
