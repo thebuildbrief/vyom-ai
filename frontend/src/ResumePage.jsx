@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { upload as uploadToBlob } from '@vercel/blob/client';
 import { formatDateTime } from './dates.js';
 import DashboardShell from './DashboardShell.jsx';
 
@@ -48,6 +49,7 @@ function uploadWithProgress(file, onProgress) {
       let data = {};
       try { data = JSON.parse(xhr.responseText || '{}'); } catch { /* Keep the friendly fallback below. */ }
       if (xhr.status >= 200 && xhr.status < 300) resolve(data);
+      else if (xhr.status === 413) reject(Error('This file is too large for the current upload path. Choose a smaller PDF or Word document.'));
       else reject(Error(data.error || 'The resume could not be uploaded.'));
     };
     xhr.onerror = () => reject(Error('The upload failed. Check your connection and try again.'));
@@ -56,6 +58,26 @@ function uploadWithProgress(file, onProgress) {
     form.append('resume', file);
     xhr.send(form);
   });
+}
+
+async function uploadDirectToBlob(file, userId, onProgress) {
+  const extension = file.name.toLowerCase().endsWith('.docx') ? '.docx' : '.pdf';
+  const resumeId = window.crypto.randomUUID();
+  await uploadToBlob(`resumes/${userId}/${resumeId}${extension}`, file, {
+    access: 'private',
+    handleUploadUrl: `${apiBase}/api/resumes/blob-upload`,
+    clientPayload: JSON.stringify({ resumeId, filename: file.name }),
+    contentType: extension === '.docx' ? DOCX_MIME : 'application/pdf',
+    onUploadProgress: event => onProgress(Math.min(99, Math.max(1, Math.round(event.percentage || 0))))
+  });
+  const response = await fetch(`${apiBase}/api/resumes/${resumeId}/confirm`, {
+    method: 'POST', credentials: 'include', cache: 'no-store',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ filename: file.name })
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw Error(data.error || 'The resume was uploaded but could not be saved. Please try again.');
+  return data;
 }
 
 export default function ResumePage({ api, user }) {
@@ -94,10 +116,12 @@ export default function ResumePage({ api, user }) {
     const maximum = config?.maximum_size || 8 * 1024 * 1024;
     if (file.size > maximum) { setError(`${file.name} is ${formatBytes(file.size)}. The limit is ${Math.round(maximum / 1048576)} MB.`); return; }
     if (config && !config.storage_configured) { setError('Private resume storage is not configured on the server yet. Uploads are unavailable.'); return; }
+    const direct = config?.method === 'blob-client';
+    if (direct && !user?.id) { setError('Please sign in again to upload a resume.'); return; }
     setUploading(true);
     setProgress(0);
     try {
-      const data = await uploadWithProgress(file, setProgress);
+      const data = direct ? await uploadDirectToBlob(file, user.id, setProgress) : await uploadWithProgress(file, setProgress);
       setProgress(100);
       setNotice(data.analysis_error || data.message || 'Resume uploaded.');
       setParsed({ id: data.resume.id, filename: data.resume.filename, mime_type: data.resume.mime_type, size_bytes: data.resume.size_bytes, extracted: Boolean(data.resume.extracted_text), sections: data.resume.sections || {}, analysis: data.resume.analysis, analysisStatus: data.resume.analysis_status });
@@ -127,6 +151,14 @@ export default function ResumePage({ api, user }) {
 
   async function download(item) {
     setError('');
+    if (config?.storage_provider === 'blob') {
+      const anchor = document.createElement('a');
+      anchor.href = `${apiBase}/api/resumes/${item.id}/file?download=1`;
+      anchor.download = item.filename;
+      anchor.rel = 'noopener';
+      document.body.appendChild(anchor); anchor.click(); anchor.remove();
+      return;
+    }
     try {
       const response = await fetch(`${apiBase}/api/resumes/${item.id}/file`, { credentials: 'include', cache: 'no-store' });
       if (!response.ok) throw Error('The resume could not be downloaded.');
@@ -174,7 +206,7 @@ export default function ResumePage({ api, user }) {
           {config && !config.storage_configured && <p className="form-error" role="alert">Private storage is not configured on the server, so uploads are disabled in this environment.</p>}
           {notice && <p className="resume-notice" role="status">{notice}</p>}
           {error && <p className="form-error" role="alert">{error}</p>}
-          <p className="resume-privacy">Resume files are never exposed publicly. Downloads are authenticated and cached privately.</p>
+          <p className="resume-privacy">Resume files are stored privately and are never exposed publicly. Uploads go directly to private storage, the server validates every file, and previews and downloads require your signed-in account.</p>
         </section>
 
         <section className="dash-panel resume-library">

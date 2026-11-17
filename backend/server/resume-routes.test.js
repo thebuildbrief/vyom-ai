@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import Database from 'better-sqlite3';
 import jwt from 'jsonwebtoken';
 import fs from 'node:fs/promises';
@@ -106,4 +107,119 @@ test('resume AI analysis reports missing credentials instead of fabricating find
   const { analyzeResumeText }=await import('./resume-analysis.js');
   try{await assert.rejects(()=>analyzeResumeText('Resume says JavaScript.'),error=>error.status===503&&/OPENAI_API_KEY/.test(error.message))}
   finally{if(previous===undefined)delete process.env.OPENAI_API_KEY;else process.env.OPENAI_API_KEY=previous}
+});
+
+function uploadHarness(db,auth,storage,secret,tokens){
+  const routes=new Map(),app={get:(route,...handlers)=>routes.set(`GET ${route}`,handlers),post:(route,...handlers)=>routes.set(`POST ${route}`,handlers),delete:(route,...handlers)=>routes.set(`DELETE ${route}`,handlers)};
+  installResumeRoutes(app,{db,auth,storage});
+  async function call(user,method,route,{body={},params={},query={}}={}){
+    const handlers=routes.get(`${method} ${route}`);assert.ok(handlers,`missing ${method} ${route}`);
+    const req={headers:{authorization:`Bearer ${tokens[user]||''}`},user:user?{id:user}:undefined,params,query,body,get:()=>undefined};
+    const res={statusCode:200,headers:{},status(code){this.statusCode=code;return this},json(value){this.body=value;return this},setHeader(name,value){this.headers[name]=value},send(value){this.body=value;return this},redirect(code,url){this.statusCode=code;this.redirectUrl=url;return this}};
+    await handlers.at(-1)(req,res,()=>{});
+    return res;
+  }
+  return {routes,call};
+}
+
+test('Vercel Blob deployments advertise 8 MB direct uploads while the multipart fallback stays within the function body limit', async t => {
+  const raw=new Database(':memory:');
+  const db={dialect:'sqlite',prepare:raw.prepare.bind(raw),exec:raw.exec.bind(raw),pragma:raw.pragma.bind(raw),transaction:raw.transaction.bind(raw)};
+  migrate(db);
+  raw.prepare('INSERT INTO users(id,name,email,password) VALUES(?,?,?,?)').run('owner','Owner','owner@example.test','hash');
+  const secret='resume-test-secret-at-least-32-characters',tokens={owner:jwt.sign({id:'owner'},secret)};
+  const auth=(req,res,next)=>{try{req.user=jwt.verify(req.headers.authorization?.replace(/^Bearer /,'')||'',secret);return next()}catch{res.status(401).json({error:'Sign in required'})}};
+  const env={VERCEL:process.env.VERCEL,BLOB_READ_WRITE_TOKEN:process.env.BLOB_READ_WRITE_TOKEN};
+  t.after(()=>{for(const[key,value]of Object.entries(env))if(value===undefined)delete process.env[key];else process.env[key]=value;raw.close()});
+  process.env.VERCEL='1';process.env.BLOB_READ_WRITE_TOKEN='vercel_blob_rw_store123_secret';
+  const {call}=uploadHarness(db,auth,{},secret,tokens);
+  const config=await call('owner','GET','/api/resumes/upload-config');
+  assert.equal(config.body.method,'blob-client');
+  assert.equal(config.body.maximum_size,MAX_RESUME_BYTES);
+  assert.equal(config.body.maximum_size_mb,8);
+  assert.equal(config.body.storage_configured,true);
+  assert.equal(config.body.storage_provider,'blob');
+});
+
+test('direct Blob uploads issue an owner-scoped token, finalize into the database, and clean up invalid uploads', async t => {
+  const raw=new Database(':memory:');
+  const db={dialect:'sqlite',prepare:raw.prepare.bind(raw),exec:raw.exec.bind(raw),pragma:raw.pragma.bind(raw),transaction:raw.transaction.bind(raw)};
+  migrate(db);
+  raw.prepare('INSERT INTO users(id,name,email,password) VALUES(?,?,?,?)').run('owner','Owner','owner@example.test','hash');
+  raw.prepare('INSERT INTO users(id,name,email,password) VALUES(?,?,?,?)').run('other','Other','other@example.test','hash');
+  const secret='resume-test-secret-at-least-32-characters',tokens={owner:jwt.sign({id:'owner'},secret),other:jwt.sign({id:'other'},secret)};
+  const auth=(req,res,next)=>{try{req.user=jwt.verify(req.headers.authorization?.replace(/^Bearer /,'')||'',secret);return next()}catch{res.status(401).json({error:'Sign in required'})}};
+  const pdf=Buffer.from('%PDF-1.4\n1 0 obj\n<<>>\nstream\nBT (Skills: JavaScript, SQL) Tj ET\nendstream\nendobj\n%%EOF');
+  const objects=new Map(),deleted=[];
+  const storage={
+    get:async key=>{const buffer=objects.get(key);return buffer?{statusCode:200,stream:new Response(buffer).body,blob:{size:buffer.length}}:null},
+    del:async key=>{deleted.push(key);objects.delete(key)},
+    put:async()=>{throw new Error('unexpected put')},
+    issueSignedToken:async()=>({delegationToken:'delegation',clientSigningToken:'signing'}),
+    presignUrl:async()=>({presignedUrl:'https://blob.test/private/resume'})
+  };
+  const env={VERCEL:process.env.VERCEL,BLOB_READ_WRITE_TOKEN:process.env.BLOB_READ_WRITE_TOKEN,OPENAI_API_KEY:process.env.OPENAI_API_KEY};
+  t.after(()=>{for(const[key,value]of Object.entries(env))if(value===undefined)delete process.env[key];else process.env[key]=value;raw.close()});
+  process.env.VERCEL='1';process.env.BLOB_READ_WRITE_TOKEN='vercel_blob_rw_store123_secret';delete process.env.OPENAI_API_KEY;
+  const {call}=uploadHarness(db,auth,storage,secret,tokens);
+  const id=crypto.randomUUID(),key=`resumes/owner/${id}.pdf`;
+  objects.set(key,pdf);
+  const token=await call('owner','POST','/api/resumes/blob-upload',{body:{type:'blob.generate-client-token',payload:{pathname:key,clientPayload:JSON.stringify({resumeId:id,filename:'candidate.pdf'}),multipart:false}}});
+  assert.equal(token.statusCode,200);
+  assert.match(token.body.clientToken,/^vercel_blob_client_/);
+  const confirm=await call('owner','POST','/api/resumes/:id/confirm',{params:{id},body:{filename:'candidate.pdf'}});
+  assert.equal(confirm.statusCode,201);
+  assert.equal(confirm.body.resume.id,id);
+  assert.equal(confirm.body.resume.extracted_text,true);
+  assert.equal(confirm.body.resume.analysis_status,'unavailable');
+  assert.match(confirm.body.message,/Add OPENAI_API_KEY/);
+  const row=raw.prepare('SELECT user_id,path,mime_type,size_bytes FROM resumes WHERE id=?').get(id);
+  assert.equal(row.user_id,'owner');
+  assert.equal(row.path,`blob:${key}`);
+  assert.equal(row.mime_type,PDF_TYPE);
+  assert.equal(Number(row.size_bytes),pdf.length);
+  const duplicate=await call('owner','POST','/api/resumes/:id/confirm',{params:{id},body:{filename:'candidate.pdf'}});
+  assert.equal(duplicate.statusCode,200);
+  assert.equal(raw.prepare('SELECT COUNT(*) AS count FROM resumes WHERE id=?').get(id).count,1);
+
+  const forbidden=await call('owner','POST','/api/resumes/blob-upload',{body:{type:'blob.generate-client-token',payload:{pathname:`resumes/other/${crypto.randomUUID()}.pdf`,clientPayload:JSON.stringify({resumeId:crypto.randomUUID(),filename:'candidate.pdf'}),multipart:false}}});
+  assert.equal(forbidden.statusCode,403);
+  assert.match(forbidden.body.error,/not allowed/);
+
+  const invalidId=crypto.randomUUID(),invalidKey=`resumes/owner/${invalidId}.pdf`;
+  objects.set(invalidKey,Buffer.from('not a real pdf'));
+  const invalid=await call('owner','POST','/api/resumes/:id/confirm',{params:{id:invalidId},body:{filename:'broken.pdf'}});
+  assert.equal(invalid.statusCode,400);
+  assert.match(invalid.body.error,/valid PDF header/);
+  assert.equal(raw.prepare('SELECT COUNT(*) AS count FROM resumes WHERE id=?').get(invalidId).count,0);
+  assert.ok(deleted.includes(invalidKey));
+
+  const other=await call('other','POST','/api/resumes/:id/confirm',{params:{id},body:{filename:'candidate.pdf'}});
+  assert.equal(other.statusCode,404);
+  assert.equal(raw.prepare('SELECT COUNT(*) AS count FROM resumes WHERE id=? AND user_id=?').get(id,'other').count,0);
+});
+
+test('private Blob downloads redirect to short-lived authenticated URLs and stay owner-only', async t => {
+  const raw=new Database(':memory:');
+  const db={dialect:'sqlite',prepare:raw.prepare.bind(raw),exec:raw.exec.bind(raw),pragma:raw.pragma.bind(raw),transaction:raw.transaction.bind(raw)};
+  migrate(db);
+  raw.prepare('INSERT INTO users(id,name,email,password) VALUES(?,?,?,?)').run('owner','Owner','owner@example.test','hash');
+  raw.prepare('INSERT INTO users(id,name,email,password) VALUES(?,?,?,?)').run('other','Other','other@example.test','hash');
+  raw.prepare("INSERT INTO resumes(id,user_id,filename,path,extracted_text,analysis,mime_type,size_bytes) VALUES(?,?,?,?,'','',?,?)").run('resume-1','owner','candidate.pdf','blob:resumes/owner/resume-1.pdf',PDF_TYPE,10);
+  const secret='resume-test-secret-at-least-32-characters',tokens={owner:jwt.sign({id:'owner'},secret),other:jwt.sign({id:'other'},secret)};
+  const auth=(req,res,next)=>{try{req.user=jwt.verify(req.headers.authorization?.replace(/^Bearer /,'')||'',secret);return next()}catch{res.status(401).json({error:'Sign in required'})}};
+  let issuedFor='';
+  const storage={issueSignedToken:async options=>{issuedFor=options.pathname;return {delegationToken:'delegation',clientSigningToken:'signing'}},presignUrl:async()=>({presignedUrl:'https://blob.test/private/resume'})};
+  const env={BLOB_READ_WRITE_TOKEN:process.env.BLOB_READ_WRITE_TOKEN};
+  t.after(()=>{for(const[key,value]of Object.entries(env))if(value===undefined)delete process.env[key];else process.env[key]=value;raw.close()});
+  process.env.BLOB_READ_WRITE_TOKEN='vercel_blob_rw_store123_secret';
+  const {call}=uploadHarness(db,auth,storage,secret,tokens);
+  const preview=await call('owner','GET','/api/resumes/:id/file',{params:{id:'resume-1'}});
+  assert.equal(preview.statusCode,302);
+  assert.equal(preview.redirectUrl,'https://blob.test/private/resume');
+  assert.equal(issuedFor,'resumes/owner/resume-1.pdf');
+  const download=await call('owner','GET','/api/resumes/:id/file',{params:{id:'resume-1'},query:{download:'1'}});
+  assert.equal(download.statusCode,302);
+  assert.equal(download.redirectUrl,'https://blob.test/private/resume?download=1');
+  assert.equal((await call('other','GET','/api/resumes/:id/file',{params:{id:'resume-1'}})).statusCode,404);
 });
